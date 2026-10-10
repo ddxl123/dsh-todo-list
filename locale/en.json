@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Todo list",
+    "description": "A global todo list panel: open it from the sidebar or with a shortcut, then add, edit, complete and delete tasks. The Host half keeps one durable list shared by every window."
+  }
+}

@@ -1,0 +1,30 @@
+# The dsh-todo-list bundle patch.
+#
+# This file is how the plugin is installed. A dsh profile composes its plugin
+# tree as ordered layers — every package listed in `dsh.profile.bundles`
+# contributes the `dsh.bundle.patch` its own package.json names, then the
+# profile's own `cordis.patch.yml`, then any `--patch` overlay. This package
+# declares itself a bundle, so installing it is one `plugin_manager`
+# `install_bundle` call against this directory.
+#
+# The row is host-plane, not preset-plane: one instance owns the todo file and
+# the `/api/dsh-todo-list` endpoint, so every browser window reads and writes the
+# same list. The same row in an agent preset would give each session its own
+# copy of the file and its own list. Nothing is exposed to the model: this is a
+# page feature.
+#
+# Every value below is overridable from a later layer (the active profile's
+# `cordis.patch.yml` or a `--patch` overlay); a patch replaces a row's whole
+# `config`, so restate every key you need. Anything omitted falls back to the
+# plugin's documented default.
+
+- insert:
+    - id: dsh-todo-list
+      name: 'dsh-todo-list'
+      config:
+        # Where the list is stored, relative to the harness home
+        # (`ctx.profileContext.home`, i.e. `$DSH_HOME`). The file is written
+        # atomically; a corrupt file is moved aside rather than overwritten.
+        fileName: todos.json
+        # The maximum number of open+completed tasks one list may hold.
+        maxTodos: 5000
