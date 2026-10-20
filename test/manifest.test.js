@@ -175,6 +175,66 @@ describe('wiring', () => {
     assert.match(bundle, /failure\.code === UNREACHABLE \? \{ status: 'error' \} : \{\}/)
   })
 
+  it('asks for a second confirmation before deleting a task or clearing completed ones', () => {
+    const bundle = read(pkg.exports['./client'])
+    // The user requirement: one click must not reach the Host. The row and
+    // toolbar handlers only open the dialog; the mutation happens from the
+    // dialog's confirm action, after the user has answered it.
+    assert.doesNotMatch(bundle, /onClick: \(\) => client\.remove\(/)
+    assert.doesNotMatch(bundle, /onClick: \(\) => client\.clearCompleted\(/)
+    assert.match(bundle, /onClick: \(event\) => onRequestDelete\(todo, event\.currentTarget\)/)
+    assert.match(bundle, /onClick: \(event\) => requestClear\(event\.currentTarget\)/)
+    assert.match(bundle, /if \(confirm !== null\)/)
+    assert.match(bundle, /if \(request\.kind === 'delete'\) client\.remove\(request\.id\)/)
+    assert.match(bundle, /else client\.clearCompleted\(\)/)
+    assert.match(bundle, /onConfirm: acceptConfirm/)
+  })
+
+  it('renders the confirmation as a real modal with safe focus and dismissal', () => {
+    const bundle = read(pkg.exports['./client'])
+    // An announced modal, not a strip of text the pointer can miss.
+    assert.match(bundle, /role: 'dialog'/)
+    assert.match(bundle, /'aria-modal': 'true'/)
+    assert.match(bundle, /'aria-labelledby': 'todo-confirm-title'/)
+    assert.match(bundle, /'aria-describedby': 'todo-confirm-desc'/)
+    // Focus starts on Cancel, so a stray Enter dismisses instead of deleting,
+    // and it returns to the control that opened the dialog.
+    assert.match(bundle, /cancelRef\.current\?\.focus\(\)/)
+    assert.match(bundle, /previous\.isConnected\) previous\.focus\(\)/)
+    // Escape works from anywhere: the listener is document-level capture,
+    // because clicking the dialog's text moves focus to <body>.
+    assert.match(bundle, /document\.addEventListener\('keydown', trap, true\)/)
+    assert.match(bundle, /event\.key === 'Escape'/)
+    // The backdrop is its own element and cancels on a click.
+    assert.match(bundle, /className: 'dshTodoBackdrop'[\s\S]{0,200}?onClick: onCancel/)
+  })
+
+  it('ships the confirmation copy in both locales', () => {
+    const bundle = read(pkg.exports['./client'])
+    const keys = [
+      'confirm.cancel',
+      'confirm.cancelHint',
+      'confirm.deleteTitle',
+      'confirm.deleteBody',
+      'confirm.deleteAction',
+      'confirm.clearTitle',
+      'confirm.clearBody',
+      'confirm.clearAction',
+    ]
+    for (const locale of ['en', 'zh']) {
+      const start = bundle.indexOf(`const ${locale} = {`)
+      const dictionary = bundle.slice(start, bundle.indexOf('\n    }', start))
+      assert.ok(dictionary.length > 0, `${locale} dictionary not found`)
+      for (const key of keys) {
+        assert.match(
+          dictionary,
+          new RegExp(`'${key.replace(/\./g, '\\.')}':`),
+          `${locale} dictionary has no entry for "${key}"`,
+        )
+      }
+    }
+  })
+
   it('resolves every locale key the panel asks for', () => {
     const bundle = read(pkg.exports['./client'])
     const used = new Set()

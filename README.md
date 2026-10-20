@@ -6,6 +6,7 @@ A **global todo list for DeepSeek Harness**: open it from anywhere in the harnes
 sidebar  ☑ Todo list          ← click to open (global panel, visible in every session)
 shortcut ⌘⌥D / Ctrl+Alt+D     ← toggle the panel from anywhere
 panel    add · complete · inline edit · delete · clear completed · filters
+         delete / clear completed ask once first (Cancel · Esc · backdrop)
 ```
 
 ---
@@ -16,13 +17,14 @@ panel    add · complete · inline edit · delete · clear completed · filters
 | --- | --- |
 | **Global open** | A rail icon registered in `sidebar.panellist` (reachable from any session) plus a shortcut, so the list never requires aiming at the rail |
 | **Add** | One composer input: Enter saves, Shift+Enter starts a new line. A task holds 2000 characters; going over is reported in the panel with the count and the Add button disabled — the Host is never asked, and what you typed is never eaten |
-| **Read** | Live open/total counts, `All / Open / Completed` filters, a dedicated empty state |
+| **Read** | Live open/total counts in the header, a completion progress bar with percentage, `All / Open / Completed` filter tabs with per-tab counts, and a distinct empty state per filter |
 | **Edit** | Checkbox toggles completion (stamping `completedAt`); the task itself is an inline editor (blur or Ctrl/Cmd+Enter saves, Esc abandons), and its line breaks survive |
-| **Delete** | Per-row delete, plus *Clear completed* (disabled when nothing is completed) |
+| **Delete** | Per-row delete and *Clear completed* (disabled when nothing is completed) both ask for a second confirmation before anything reaches the Host: focus starts on Cancel, and Cancel, Esc or a backdrop click backs out (focus then returns to the button that opened the dialog) |
+| **Refreshed panel** | Brand-mark header, flat rows that highlight on hover (delete revealed on hover or focus, with a small creation-time meta line), a skeleton loading state, richer per-filter empty states, an error notice with an icon, narrow-window rules, and a shell-style modal confirmation dialog — dimmed blurred backdrop, elevated panel, Cancel on the left and a red ghost Delete on the right; motion is short and disabled under reduced motion |
 | **Durable** | Every write is atomic (temp file + rename), so a crash cannot truncate the file; an unreadable file is moved aside rather than overwritten |
 | **Consistent across windows** | Every write answers with the whole authoritative list, so a second window converges on the next operation |
 
-UI text goes through the Client locale service (Chinese and English); colors come only from `--dsw-alias-*` theme tokens, so the panel follows light and dark themes.
+UI text goes through the Client locale service (Chinese and English); colors come only from `--dsw-*` theme tokens, so the panel follows light and dark themes, and short motion is disabled when the shell asks for reduced motion.
 
 ## Install
 
@@ -48,8 +50,8 @@ The bundle layer is written into the profile (`dsh.profile.bundles` plus the `co
 
 1. Click the **Todo list** icon in the left rail, or press **⌘⌥D / Ctrl+Alt+D**.
 2. Type in the composer and press Enter — the newest task lands on top.
-3. The checkbox toggles completion, clicking the task text edits it, and the button on each row is *delete*.
-4. The filter tabs switch between all, open and completed; *Clear completed* deletes every finished task.
+3. The checkbox toggles completion and clicking the task text edits it. The button on each row is *delete*: it only opens a confirmation dialog, and nothing is sent to the Host until you confirm. Press **Cancel**, **Esc**, or click the backdrop to back out.
+4. The filter tabs switch between all, open and completed (each shows its own count); *Clear completed* asks for the same confirmation before deleting every finished task.
 5. Press the shortcut again to return to the conversation (it toggles while the panel is open).
 
 The default binding is `primary+alt+KeyD` (⌘⌥D on macOS). If it clashes with your habits, rebind it in **Settings → Shortcuts**; `web:linux` ships with no default because a browser on Linux accepts only three bindings — bind it manually there.
@@ -111,9 +113,9 @@ dsh-todo-list/
 │   ├── store.js       The only data layer: validation, ordering, atomic writes, quarantine
 │   ├── ops.js         The five operations; the route only carries the request
 │   ├── route.js       The exact /api/dsh-todo-list Fetch route (GET + POST)
-├── client/index.js    Client half: hand-written bundle registering the rail icon, panel and shortcut
+├── client/index.js    Client half: hand-written bundle registering the rail icon, panel, confirmation dialog and shortcut
 ├── locale/{zh,en}.json  Plugin card title and description
-└── test/              46 unit tests
+└── test/              49 unit tests
 ```
 
 The panel posts to `/api/dsh-todo-list`, which hands each request to `ops.js` and on to the one `TodoStore`. The HTTP layer decides only *how* a request arrives, never what an operation means, so validation, ordering and the meaning of "completed" are defined in exactly one place.
@@ -131,7 +133,7 @@ Packages such as `@deepseek-ai/dsh-client-ui-primitives` change without notice, 
 ## Tests
 
 ```bash
-node --test test/        # 46 tests
+node --test test/        # 49 tests
 npm run check            # syntax check + the full suite
 ```
 
@@ -148,21 +150,21 @@ npm run check            # syntax check + the full suite
 | Bundle installed | ✅ `dsh-todo-list` is in the profile's `dsh.profile.bundles`; row `include:dsh-todo-list` applied |
 | Host row activated | ✅ Applied (`~/.dsh/dsh-todo-list/` created by `apply`) |
 | Client registration | ✅ Confirmed in the live page: `sidebar.panellist` occupant `todo` (order 12, active) and `main` key `todo` (active) |
-| Unit tests | ✅ 46/46 |
-| Panel visuals and interaction | ⚠️ Needs your own look after a page refresh — this environment has no browser control |
+| Unit tests | ✅ 49/49 |
+| Panel visuals and interaction | ⚠️ Needs your own look after a page refresh — this environment has no browser control. The refreshed layout, theme shades and confirmation dialog are all client-side, so they appear only once the page loads the bundle's new content revision |
 
 ### The running process is one module generation behind
 
 Replacing an installed package does not invalidate the process's ESM module cache (documented DSH behaviour: *replacing an installed package requires restart to load a fresh JavaScript module generation*). The plugin was iterated during development, so:
 
-- **Client half**: the bundle is served under a content revision, so **a page refresh** picks up the current code, including the shortcut-default correction.
+- **Client half**: the bundle is served under a content revision, so **a page refresh** picks up the current code, including the shortcut-default correction and the refreshed panel with its delete confirmation.
 - **Host half**: the running process still holds the first successfully imported generation (the old two-field model, plus a `todo` agent tool). On disk it is one field with no tool. **Restarting DSH** brings the two together — and that step is now required, because the data model changed too.
 
-The panel behaves identically across those two generations, so it can be refreshed and used right away.
+The refresh and the confirmation flow are client-side, so they work against either Host generation; refresh the page and they load.
 
 ## Known limitations
 
-- Deletion is immediate and has no undo, as is *Clear completed*.
+- Deletion is permanent once confirmed — no undo and no trash, whether it is one row or *Clear completed*.
 - The active filter and any uncommitted composer text reset when the panel is closed (the component unmounts with the panel).
 - No drag-to-reorder and no due dates; the list is newest-first by creation time.
 - A task is one block of text (line breaks allowed): no rich text, no subtasks.

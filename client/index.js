@@ -14,6 +14,15 @@
  *   - a shortcut (`todo.open`) that toggles the panel from any session, so the
  *     list is reachable without aiming at the rail.
  *
+ * ## Destructive actions ask twice
+ *
+ * Deleting a task and clearing every completed task both go through
+ * {@link ConfirmDialog}: the row button (and the toolbar button) only *asks*,
+ * and the Host is called from the dialog's confirm button. The dialog takes
+ * focus, traps Tab, cancels on Escape or a backdrop click, restores focus to
+ * the control that opened it, and labels itself for assistive technology — so
+ * the second confirmation is a real gate, not a flash message.
+ *
  * ## Why it is a hand-written bundle
  *
  * Client halves are loaded by the web module loader (`window.__ModuleLoader__`)
@@ -75,6 +84,8 @@ window.__ModuleLoader__.load({
       'panel': '待办清单',
       'title': '待办清单',
       'counts': '{active} 项未完成 · 共 {total} 项',
+      'progress.percent': '{percent}%',
+      'progress.aria': '完成进度 {percent}%',
       'composer.placeholder': '添加一项待办，Enter 保存，Shift+Enter 换行',
       'composer.add': '添加',
       'composer.tooLong': '一条待办最多 {limit} 字，当前 {length} 字',
@@ -85,7 +96,9 @@ window.__ModuleLoader__.load({
       'empty.all': '还没有待办事项',
       'empty.active': '没有未完成的事项',
       'empty.completed': '还没有已完成的事项',
-      'empty.hint': '在上方输入框添加第一项。',
+      'emptyHint.all': '在上方输入框添加第一项。',
+      'emptyHint.active': '所有事项都完成了，休息一下。',
+      'emptyHint.completed': '勾选一项待办后，它会出现在这里。',
       'loading': '正在载入待办清单…',
       'error.unreachable': '无法访问 Host 半端：{message}',
       'error.rejected': 'Host 拒绝了这个操作：{message}',
@@ -98,12 +111,22 @@ window.__ModuleLoader__.load({
       'row.delete': '删除',
       'row.editHint': '失焦或按 Ctrl+Enter 保存，Esc 取消',
       'row.added': '创建于 {time}',
+      'confirm.cancel': '取消',
+      'confirm.cancelHint': '按 Esc 取消',
+      'confirm.deleteTitle': '删除这条待办？',
+      'confirm.deleteBody': '“{text}”将被永久删除，此操作无法撤销。',
+      'confirm.deleteAction': '删除',
+      'confirm.clearTitle': '清除所有已完成的待办？',
+      'confirm.clearBody': '{count} 项已完成的待办将被永久删除，此操作无法撤销。',
+      'confirm.clearAction': '清除',
       'shortcut.open': '打开待办清单',
     }
     const en = {
       'panel': 'Todo list',
       'title': 'Todo list',
       'counts': '{active} open · {total} total',
+      'progress.percent': '{percent}%',
+      'progress.aria': '{percent}% complete',
       'composer.placeholder': 'Add a task — Enter saves, Shift+Enter starts a new line',
       'composer.add': 'Add',
       'composer.tooLong': 'A task holds at most {limit} characters; this one has {length}.',
@@ -114,7 +137,9 @@ window.__ModuleLoader__.load({
       'empty.all': 'No tasks yet',
       'empty.active': 'Nothing open',
       'empty.completed': 'Nothing completed yet',
-      'empty.hint': 'Add your first task above.',
+      'emptyHint.all': 'Add your first task above.',
+      'emptyHint.active': 'Everything is done. Take a break.',
+      'emptyHint.completed': 'Check a task off and it will show up here.',
       'loading': 'Loading the todo list…',
       'error.unreachable': 'Cannot reach the Host half: {message}',
       'error.rejected': 'The Host refused this change: {message}',
@@ -127,71 +152,118 @@ window.__ModuleLoader__.load({
       'row.delete': 'Delete',
       'row.editHint': 'Saves on blur or Ctrl+Enter; Esc cancels',
       'row.added': 'Added {time}',
+      'confirm.cancel': 'Cancel',
+      'confirm.cancelHint': 'Press Esc to cancel',
+      'confirm.deleteTitle': 'Delete this task?',
+      'confirm.deleteBody': '“{text}” will be permanently deleted. This cannot be undone.',
+      'confirm.deleteAction': 'Delete',
+      'confirm.clearTitle': 'Clear all completed tasks?',
+      'confirm.clearBody': 'This permanently deletes {count} completed task(s) and cannot be undone.',
+      'confirm.clearAction': 'Clear',
       'shortcut.open': 'Open the todo list',
     }
 
     /**
      * The panel's stylesheet.
      *
-     * Spacing, type sizes and row patterns follow the Host's own management
-     * pages (the Schedule page is the closest sibling). Colors are theme tokens
-     * only; a token the running theme does not define falls back to a token
-     * this plugin's theme inspection did report, so a renamed token degrades
-     * the shade rather than the rendering.
+     * Follows the shell's own design language rather than inventing one:
+     * the Schedule page's page/scroll/content geometry, pill filter tabs,
+     * flat hover-tinted rows, the shared input/button/notice patterns, and the
+     * shell modal's mask + elevated panel for the delete confirmation. Colors
+     * come only from `--dsw-*` theme tokens (including the pre-mixed
+     * interactive/state/mask tints), so light and dark themes both follow the
+     * shell. Motion is 150–200 ms and disabled under `prefers-reduced-motion`.
      */
     const css = `
 .dshTodoPage{width:100%;min-width:0;height:100%;min-height:0;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);font-size:14px;line-height:1.6;display:flex;overflow:hidden}
 .dshTodoScroll{scrollbar-gutter:stable;--dsh-scrollbar-width:9px;--dsh-scrollbar-thumb-border:2px;flex:1;min-height:0;overflow:auto}
-.dshTodoContent{max-width:960px;margin:0 auto;padding:0 clamp(24px,4vw,48px) 48px}
-.dshTodoHeading{align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:18px;padding-top:28px;display:flex}
+.dshTodoContent{width:100%;max-width:960px;margin:0 auto;padding:0 clamp(24px,4vw,48px) 48px}
+.dshTodoHeading{display:flex;align-items:center;gap:14px;margin:0 0 18px;padding-top:28px}
 [data-platform=darwin] .dshTodoHeading{padding-top:calc(28px + var(--dsh-frame-top-clearance,0px))}
-.dshTodoHeading h1{flex:1;min-width:0;margin:0;font-size:20px;font-weight:500;line-height:28px}
-.dshTodoCounts{flex:none;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px;font-variant-numeric:tabular-nums}
-.dshTodoComposer{border:.5px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);border-radius:12px;align-items:center;gap:8px;padding:4px 4px 4px 10px;margin:0 0 16px;display:flex;transition:border-color .15s}
+.dshTodoHeadingMain{display:flex;align-items:center;gap:14px;flex:1;min-width:0}
+.dshTodoBrandMark{width:42px;height:42px;flex:none;display:grid;place-items:center;color:var(--dsw-alias-state-business-primary);border:.5px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-layer-1)}
+.dshTodoHeadingText{display:flex;flex-direction:column;gap:2px;min-width:0}
+.dshTodoHeading h1{margin:0;font-size:20px;font-weight:500;line-height:28px}
+.dshTodoCounts{color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px;font-variant-numeric:tabular-nums}
+.dshTodoProgress{display:flex;align-items:center;gap:10px;margin:0 0 18px}
+.dshTodoProgressTrack{flex:1;min-width:0;height:4px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}
+.dshTodoProgressFill{height:100%;border-radius:inherit;background:var(--dsw-alias-brand-primary);transition:width .2s ease-in-out}
+.dshTodoProgressValue{flex:none;min-width:32px;text-align:right;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
+.dshTodoComposer{display:flex;align-items:flex-end;gap:8px;margin:0 0 4px;padding:4px 4px 4px 12px;border:.5px solid var(--dsw-alias-border-l3);border-radius:12px;background:var(--dsw-alias-bg-base);transition:border-color .15s}
 .dshTodoComposer:hover{border-color:var(--dsw-alias-border-l2)}
-.dshTodoComposer:focus-within{border-color:var(--dsw-alias-brand-primary)}
-.dshTodoInput{box-sizing:border-box;field-sizing:content;flex:1;min-width:0;max-height:132px;color:var(--dsw-alias-label-primary);background:0 0;border:0;outline:none;resize:none;overflow:auto;font:inherit;font-size:14px;line-height:22px;margin:7px 0;padding:0}
-.dshTodoInput::placeholder{color:var(--dsw-alias-label-secondary);opacity:.75}
-.dshTodoButton{height:32px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l1);border-radius:16px;cursor:pointer;flex:none;align-items:center;padding:0 14px;font:inherit;font-size:13px;line-height:20px;display:inline-flex}
-.dshTodoButton:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2)}
-.dshTodoButton:disabled{color:var(--dsw-alias-label-secondary);cursor:default;opacity:.55}
-.dshTodoButtonPrimary{background:var(--dsw-alias-brand-primary);border-color:transparent;color:var(--dsw-alias-bg-base);font-weight:500}
-.dshTodoButtonPrimary:hover:not(:disabled){background:var(--dsw-alias-brand-primary);opacity:.88}
-.dshTodoFilters{flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px;margin-bottom:10px;display:flex}
-.dshTodoFilterTabs{flex-wrap:wrap;align-items:center;gap:8px 4px;display:flex}
-.dshTodoFilterTab{height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:0;border-radius:14px;flex:none;align-items:center;padding:0 10px;font:inherit;font-size:14px;line-height:22px;display:inline-flex}
-.dshTodoFilterTab:hover{background:var(--dsw-alias-bg-layer-1)}
-.dshTodoFilterTabActive{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
-.dshTodoClear{color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:0;border-radius:14px;padding:4px 10px;font:inherit;font-size:13px;line-height:20px}
-.dshTodoClear:hover:not(:disabled){background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary)}
-.dshTodoClear:disabled{cursor:default;opacity:.5}
-.dshTodoList{flex-direction:column;gap:2px;margin:0;padding:0;list-style:none;display:flex}
-.dshTodoRow{align-items:flex-start;gap:10px;border-radius:12px;padding:8px;display:flex}
-.dshTodoRow:hover{background:var(--dsw-alias-bg-layer-1)}
-.dshTodoCheck{accent-color:var(--dsw-alias-brand-primary);width:16px;height:16px;flex:none;cursor:pointer;margin:4px 0 0}
-.dshTodoBody{flex:1;min-width:0;flex-direction:column;display:flex}
-.dshTodoTitle{color:var(--dsw-alias-label-primary);text-align:left;cursor:text;background:0 0;border:0;width:100%;overflow-wrap:anywhere;white-space:pre-wrap;margin:0;padding:0;font:inherit;font-size:14px;line-height:22px}
-.dshTodoTitle:hover{color:var(--dsw-alias-brand-primary)}
-.dshTodoDone .dshTodoTitle{color:var(--dsw-alias-label-secondary);text-decoration:line-through}
-.dshTodoEdit{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);width:100%;color:var(--dsw-alias-label-primary);font:inherit;border-radius:8px;outline:none;resize:vertical;padding:3px 8px;font-size:14px;line-height:22px}
-.dshTodoEdit:focus{border-color:var(--dsw-alias-brand-primary)}
-.dshTodoHint{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:20px;margin:4px 0 0}
+.dshTodoComposer:focus-within{border-color:var(--dsw-alias-state-business-primary)}
+.dshTodoInput{box-sizing:border-box;field-sizing:content;flex:1;min-width:0;max-height:132px;margin:7px 0;padding:0;color:var(--dsw-alias-label-primary);background:0 0;border:0;outline:none;resize:none;overflow:auto;font:inherit;font-size:14px;line-height:22px}
+.dshTodoInput::placeholder{color:var(--dsw-alias-label-caption)}
+.dshTodoButton{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:36px;flex:none;padding:0 14px;border:0;border-radius:12px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:22px;cursor:pointer;transition:background .15s,border-color .15s,color .15s,opacity .15s}
+.dshTodoButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
+.dshTodoButton:disabled{cursor:not-allowed;opacity:.4}
+.dshTodoButtonCompact{height:32px;padding:0 12px;border-radius:16px;font-size:13px;line-height:20px}
+.dshTodoButtonPrimary{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);font-weight:500}
+.dshTodoButtonPrimary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}
+.dshTodoButtonOutline{border:.5px solid var(--dsw-alias-border-l3)}
+.dshTodoButtonDanger{color:var(--dsw-alias-state-error-primary);font-weight:500}
+.dshTodoButtonDanger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger)}
+.dshTodoHint{margin:8px 0 0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
 .dshTodoHintWarn{color:var(--dsw-alias-state-error-primary)}
-.dshTodoComposerHint{font-size:13px;margin:0 0 12px}
-.dshTodoRowActions{flex:none;align-items:center;gap:2px;display:flex}
-.dshTodoIconButton{width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:0;border-radius:8px;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}
-.dshTodoIconButton:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
-.dshTodoIconButtonDanger:hover{color:var(--dsw-alias-state-error-primary)}
-.dshTodoEmpty{text-align:center;color:var(--dsw-alias-label-secondary);flex-direction:column;align-items:center;padding:44px 20px;display:flex}
-.dshTodoEmptyTitle{color:var(--dsw-alias-label-secondary);margin:0 0 6px;font-size:14px;font-weight:400}
-.dshTodoEmpty p{margin:0}
-.dshTodoNotice{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);border-radius:10px;flex-wrap:wrap;align-items:flex-start;gap:9px;margin:0 0 16px;padding:12px 14px;font-size:13px;line-height:20px;display:flex}
+.dshTodoComposerHint{margin:8px 0 0}
+.dshTodoFilters{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;margin:18px 0 12px;flex-wrap:wrap}
+.dshTodoFilterTabs{display:flex;align-items:center;gap:2px;flex-wrap:wrap;min-width:0}
+.dshTodoFilterTab{display:inline-flex;align-items:center;gap:5px;height:28px;flex:none;padding:0 10px;border:0;border-radius:14px;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:14px;line-height:22px;cursor:pointer;transition:background .15s,color .15s}
+.dshTodoFilterTab:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dshTodoFilterTabActive{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dshTodoFilterCount{color:var(--dsw-alias-label-caption);font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
+.dshTodoFilterTabActive .dshTodoFilterCount{color:var(--dsw-alias-label-secondary)}
+.dshTodoClear{display:inline-flex;align-items:center;height:28px;flex:none;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;line-height:18px;cursor:pointer;transition:background .15s,color .15s}
+.dshTodoClear:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}
+.dshTodoClear:disabled{cursor:not-allowed;opacity:.4}
+.dshTodoList{display:flex;flex-direction:column;gap:2px;margin:0;padding:0;list-style:none}
+.dshTodoRow{display:flex;align-items:flex-start;gap:10px;padding:8px;border-radius:12px;background:transparent;transition:background .15s;animation:dshTodoRowIn .2s ease-in-out}
+.dshTodoRow:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dshTodoCheckWrap{display:grid;place-items:center;width:26px;height:26px;flex:none;border-radius:8px;cursor:pointer;transition:background .15s}
+.dshTodoCheckWrap:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dshTodoCheck{display:block;width:16px;height:16px;margin:0;accent-color:var(--dsw-alias-brand-primary);cursor:pointer}
+.dshTodoBody{display:flex;flex-direction:column;gap:1px;flex:1;min-width:0}
+.dshTodoTitle{width:100%;margin:0;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);text-align:left;overflow-wrap:anywhere;white-space:pre-wrap;font:inherit;font-size:14px;line-height:22px;cursor:text}
+.dshTodoDone .dshTodoTitle{color:var(--dsw-alias-label-tertiary);text-decoration:line-through}
+.dshTodoMeta{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
+.dshTodoEdit{box-sizing:border-box;width:100%;min-height:36px;margin:0;padding:6px 10px;border:.5px solid var(--dsw-alias-border-l4);border-radius:12px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);outline:none;resize:vertical;font:inherit;font-size:14px;line-height:22px}
+.dshTodoEdit:focus{border-color:var(--dsw-alias-state-business-primary)}
+.dshTodoRowActions{display:flex;align-items:center;gap:2px;flex:none;opacity:0;transition:opacity .15s}
+.dshTodoRow:hover .dshTodoRowActions,.dshTodoRow:focus-within .dshTodoRowActions{opacity:1}
+.dshTodoIconButton{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;flex:none;padding:0;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;transition:background .15s,color .15s}
+.dshTodoIconButton:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dshTodoIconButtonDanger:hover{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}
+.dshTodoEmpty{display:flex;flex-direction:column;align-items:center;padding:48px 20px;text-align:center;animation:dshTodoFadeIn .2s ease-in-out}
+.dshTodoEmptyArt{display:grid;place-items:center;width:56px;height:56px;margin-bottom:12px;border:.5px solid var(--dsw-alias-border-l1);border-radius:16px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-caption)}
+.dshTodoEmptyTitle{margin:0 0 8px;color:var(--dsw-alias-label-primary);font-size:15px;font-weight:500;line-height:22px}
+.dshTodoEmptyHint{margin:0;color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:21px}
+.dshTodoLoading{display:flex;flex-direction:column;gap:2px}
+.dshTodoSkeleton{height:52px;border-radius:12px;background:var(--dsw-alias-bg-skeleton);animation:dshTodoPulse 2s cubic-bezier(.36,0,.64,1) infinite}
+.dshTodoSrOnly{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.dshTodoNotice{display:flex;align-items:flex-start;flex-wrap:wrap;gap:9px;margin:0 0 16px;padding:12px 14px;border:.5px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px}
 .dshTodoNotice p{flex:1;min-width:0;margin:0}
-.dshTodoNoticeError{color:var(--dsw-alias-state-error-primary)}
-.dshTodoPage :focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
-.dshTodoTitle:focus-visible,.dshTodoEdit:focus-visible{outline:none}
-.dshTodoEdit:focus-visible{border-color:var(--dsw-alias-brand-primary)}
+.dshTodoNotice .dshTodoButton{margin-left:auto}
+.dshTodoNoticeError{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
+.dshTodoNoticeIcon{display:inline-flex;flex:none;margin-top:2px;color:var(--dsw-alias-state-warn-primary)}
+.dshTodoNoticeError .dshTodoNoticeIcon{color:var(--dsw-alias-state-error-primary)}
+.dshTodoOverlay{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:max(24px,var(--dsh-frame-overlay-top,24px)) 24px}
+.dshTodoBackdrop{position:absolute;inset:var(--dsh-frame-chrome-top,0px) 0 0;background:var(--dsw-alias-bg-mask-1);backdrop-filter:var(--dsw-mask-blur);-webkit-backdrop-filter:var(--dsw-mask-blur);animation:dshTodoFadeIn .2s ease-in-out}
+.dshTodoDialog{position:relative;z-index:1;width:min(380px,100%);padding:24px;border:0;border-radius:var(--dsw-radius-panel);background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-elevation-prominent);animation:dshTodoDialogIn .2s ease-in-out}
+.dshTodoDialogTitle{margin:0 0 8px;color:var(--dsw-alias-label-primary);font-size:16px;font-weight:500;line-height:24px}
+.dshTodoDialogBody{margin:0;color:var(--dsw-alias-label-secondary);font-size:14px;line-height:22px;overflow-wrap:anywhere}
+.dshTodoDialogHint{margin:10px 0 0;color:var(--dsw-alias-label-caption);font-size:12px;line-height:18px}
+.dshTodoDialogActions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
+.dshTodoDialogActions .dshTodoButton{min-width:72px}
+.dshTodoPage :focus-visible{outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}
+.dshTodoEdit:focus-visible{outline:none}
 .dshTodoIcon{display:block}
+@keyframes dshTodoRowIn{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:none}}
+@keyframes dshTodoFadeIn{from{opacity:0}to{opacity:1}}
+@keyframes dshTodoDialogIn{from{opacity:0;transform:translateY(6px) scale(.97)}to{opacity:1;transform:none}}
+@keyframes dshTodoPulse{0%,100%{opacity:1}50%{opacity:.55}}
+@media (hover:none){.dshTodoRowActions{opacity:1}}
+@media (max-width:760px){.dshTodoContent{padding:0 20px 32px}.dshTodoHeading{padding-top:20px}.dshTodoFilters{margin-top:14px}.dshTodoRowActions{opacity:1}}
+@media (prefers-reduced-motion:reduce){.dshTodoPage *{animation:none!important;transition:none!important}}
 `
 
     /** The `<style>` element id, so a second materialization cannot double-inject. */
@@ -423,6 +495,19 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Flatten and shorten a task text for a confirmation sentence, so deleting a
+     * 2000-character task does not turn the dialog into a wall of text.
+     *
+     * @param {string} text - the task text.
+     * @param {number} [limit] - the character budget.
+     * @returns {string} a single-line snippet.
+     */
+    function snippet(text, limit = 80) {
+      const flattened = text.replace(/\s+/g, ' ').trim()
+      return flattened.length > limit ? `${flattened.slice(0, limit)}…` : flattened
+    }
+
+    /**
      * One task row.
      *
      * A task is one field, so the row is one line of text — rendered with its
@@ -431,10 +516,14 @@ window.__ModuleLoader__.load({
      * editor commits on blur or Ctrl/Cmd+Enter and abandons on Escape, which is
      * what every other list in the shell has taught the user to expect.
      *
+     * Delete is the exception to "one click does the thing": the row button
+     * only hands the task to the panel's confirmation dialog, which is what
+     * calls the Host.
+     *
      * @param {object} props - row props.
      * @returns {object} the row element.
      */
-    function TodoRow({ todo, client, t }) {
+    function TodoRow({ todo, client, t, onRequestDelete }) {
       const [editing, setEditing] = React.useState(false)
       const [draft, setDraft] = React.useState(todo.text)
       const abandoned = React.useRef(false)
@@ -504,17 +593,17 @@ window.__ModuleLoader__.load({
           title: t('row.added', { time: addedLabel }),
           onClick: begin,
         }, todo.text))
+        body.push(h('p', { key: 'meta', className: 'dshTodoMeta' }, t('row.added', { time: addedLabel })))
       }
 
       return h('li', { className: todo.done ? 'dshTodoRow dshTodoDone' : 'dshTodoRow' }, [
-        h('input', {
-          key: 'check',
+        h('label', { key: 'check', className: 'dshTodoCheckWrap' }, h('input', {
           type: 'checkbox',
           className: 'dshTodoCheck',
           checked: todo.done,
           'aria-label': todo.done ? t('row.reopen') : t('row.complete'),
           onChange: (event) => client.update(todo.id, { done: event.target.checked }),
-        }),
+        })),
         h('div', { key: 'body', className: 'dshTodoBody' }, body),
         h('div', { key: 'actions', className: 'dshTodoRowActions' }, [
           h('button', {
@@ -523,8 +612,116 @@ window.__ModuleLoader__.load({
             className: 'dshTodoIconButton dshTodoIconButtonDanger',
             title: t('row.delete'),
             'aria-label': t('row.delete'),
-            onClick: () => client.remove(todo.id),
+            onClick: (event) => onRequestDelete(todo, event.currentTarget),
           }, trashGlyph()),
+        ]),
+      ])
+    }
+
+    /**
+     * The second confirmation for a destructive action.
+     *
+     * Focus moves to *Cancel*, so a stray Enter dismisses instead of deleting;
+     * Tab is trapped inside the dialog, Escape and a backdrop click cancel, and
+     * the control that opened it gets focus back. It renders inside the panel,
+     * so the confirmation is scoped to the list it is about.
+     *
+     * @param {object} props - dialog props.
+     * @returns {object} the dialog element.
+     */
+    function ConfirmDialog({ request, t, onCancel, onConfirm }) {
+      const cancelRef = React.useRef(null)
+      const dialogRef = React.useRef(null)
+      /** The latest cancel callback, so the keyboard listener registers once. */
+      const cancelHandler = React.useRef(onCancel)
+      cancelHandler.current = onCancel
+
+      React.useEffect(() => {
+        if (typeof document === 'undefined') return () => {}
+        const previous = document.activeElement
+        cancelRef.current?.focus()
+        // Listen on the document in the capture phase instead of on the
+        // overlay: clicking the dialog's text moves focus to <body>, and a
+        // keydown that starts outside the dialog would never bubble through it.
+        const trap = (event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            cancelHandler.current()
+            return
+          }
+          if (event.key !== 'Tab') return
+          // Keep Tab inside the dialog: two buttons, so wrap at either end.
+          const root = dialogRef.current
+          if (root === null) return
+          const focusable = [...root.querySelectorAll('button:not([disabled])')]
+          if (focusable.length === 0) return
+          const first = focusable[0]
+          const last = focusable[focusable.length - 1]
+          const active = document.activeElement
+          if (event.shiftKey) {
+            if (active === first || !root.contains(active)) {
+              event.preventDefault()
+              last.focus()
+            }
+          } else if (active === last || !root.contains(active)) {
+            event.preventDefault()
+            first.focus()
+          }
+        }
+        document.addEventListener('keydown', trap, true)
+        return () => {
+          document.removeEventListener('keydown', trap, true)
+          if (previous !== null && previous.isConnected) previous.focus()
+        }
+      }, [])
+
+      const deleting = request.kind === 'delete'
+      const title = deleting ? t('confirm.deleteTitle') : t('confirm.clearTitle')
+      const body = deleting
+        ? t('confirm.deleteBody', { text: snippet(request.text) })
+        : t('confirm.clearBody', { count: request.count })
+      const action = deleting ? t('confirm.deleteAction') : t('confirm.clearAction')
+
+      return h('div', {
+        className: 'dshTodoOverlay',
+        onClick: (event) => {
+          if (event.target === event.currentTarget) onCancel()
+        },
+      }, [
+        h('div', {
+          key: 'backdrop',
+          className: 'dshTodoBackdrop',
+          onClick: onCancel,
+          'aria-hidden': true,
+        }),
+        h('div', {
+          key: 'dialog',
+          ref: dialogRef,
+          className: 'dshTodoDialog',
+          role: 'dialog',
+          'aria-modal': 'true',
+          'aria-labelledby': 'todo-confirm-title',
+          'aria-describedby': 'todo-confirm-desc',
+        }, [
+          h('h2', { key: 'title', id: 'todo-confirm-title', className: 'dshTodoDialogTitle' }, title),
+          h('p', { key: 'body', id: 'todo-confirm-desc', className: 'dshTodoDialogBody' }, body),
+          h('p', { key: 'hint', className: 'dshTodoDialogHint' }, t('confirm.cancelHint')),
+          h('div', { key: 'actions', className: 'dshTodoDialogActions' }, [
+            h('button', {
+              key: 'cancel',
+              ref: cancelRef,
+              type: 'button',
+              className: 'dshTodoButton dshTodoButtonOutline',
+              onClick: onCancel,
+            }, t('confirm.cancel')),
+            h('button', {
+              key: 'confirm',
+              type: 'button',
+              className: 'dshTodoButton dshTodoButtonDanger',
+              onClick: onConfirm,
+            }, action),
+          ]),
         ]),
       ])
     }
@@ -539,6 +736,8 @@ window.__ModuleLoader__.load({
       const snapshot = useTodoClient(client)
       const [draft, setDraft] = React.useState('')
       const [filter, setFilter] = React.useState('all')
+      /** The pending destructive action, or null. Nothing is deleted while it is set. */
+      const [confirm, setConfirm] = React.useState(null)
 
       // The first paint has no list yet: ask once, and again whenever the Host
       // half reappears after a failure.
@@ -559,55 +758,97 @@ window.__ModuleLoader__.load({
         })
       }
 
+      const requestDelete = (todo, trigger) => setConfirm({ kind: 'delete', id: todo.id, text: todo.text, trigger })
+      const requestClear = (trigger) => setConfirm({ kind: 'clear', count: snapshot.counts.done, trigger })
+      const acceptConfirm = () => {
+        const request = confirm
+        if (request === null) return
+        setConfirm(null)
+        if (request.kind === 'delete') client.remove(request.id)
+        else client.clearCompleted()
+      }
+
       const todos = filter === 'active'
         ? snapshot.todos.filter((todo) => !todo.done)
         : filter === 'completed'
           ? snapshot.todos.filter((todo) => todo.done)
           : snapshot.todos
+      const filterCounts = {
+        all: snapshot.counts.total,
+        active: snapshot.counts.active,
+        completed: snapshot.counts.done,
+      }
+      const total = snapshot.counts.total
+      const percent = total === 0 ? 0 : Math.round((snapshot.counts.done / total) * 100)
 
       const children = [
         h('header', { key: 'heading', className: 'dshTodoHeading' }, [
-          h('h1', { key: 'title' }, t('title')),
-          h('span', {
-            key: 'counts',
-            className: 'dshTodoCounts',
-            'aria-live': 'polite',
-          }, t('counts', { active: snapshot.counts.active, total: snapshot.counts.total })),
-        ]),
-        h('form', {
-          key: 'composer',
-          className: 'dshTodoComposer',
-          onSubmit: (event) => {
-            event.preventDefault()
-            submit()
-          },
-        }, [
-          h('textarea', {
-            key: 'input',
-            className: 'dshTodoInput',
-            value: draft,
-            rows: 1,
-            placeholder: t('composer.placeholder'),
-            'aria-label': t('composer.placeholder'),
-            'aria-invalid': tooLong,
-            onChange: (event) => setDraft(event.target.value),
-            onKeyDown: (event) => {
-              // A textarea does not submit its form on Enter, so the composer
-              // asks for it explicitly: Enter saves, Shift+Enter breaks the line.
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault()
-                submit()
-              }
-            },
-          }),
-          h('button', {
-            key: 'add',
-            type: 'submit',
-            className: 'dshTodoButton dshTodoButtonPrimary',
-            disabled: text === '' || tooLong,
-          }, t('composer.add')),
+          h('div', { key: 'main', className: 'dshTodoHeadingMain' }, [
+            h('span', { key: 'mark', className: 'dshTodoBrandMark', 'aria-hidden': true }, h(TodoIcon, { size: 22 })),
+            h('div', { key: 'text', className: 'dshTodoHeadingText' }, [
+              h('h1', { key: 'title' }, t('title')),
+              h('span', {
+                key: 'counts',
+                className: 'dshTodoCounts',
+                'aria-live': 'polite',
+              }, t('counts', { active: snapshot.counts.active, total })),
+            ]),
+          ]),
         ]),
       ]
+
+      if (total > 0) {
+        children.push(h('div', { key: 'progress', className: 'dshTodoProgress' }, [
+          h('div', {
+            key: 'track',
+            className: 'dshTodoProgressTrack',
+            role: 'progressbar',
+            'aria-valuemin': 0,
+            'aria-valuemax': total,
+            'aria-valuenow': snapshot.counts.done,
+            'aria-label': t('progress.aria', { percent }),
+          }, h('div', {
+            key: 'fill',
+            className: 'dshTodoProgressFill',
+            style: { width: `${percent}%` },
+          })),
+          h('span', { key: 'value', className: 'dshTodoProgressValue' }, t('progress.percent', { percent })),
+        ]))
+      }
+
+      children.push(h('form', {
+        key: 'composer',
+        className: 'dshTodoComposer',
+        onSubmit: (event) => {
+          event.preventDefault()
+          submit()
+        },
+      }, [
+        h('textarea', {
+          key: 'input',
+          className: 'dshTodoInput',
+          value: draft,
+          rows: 1,
+          placeholder: t('composer.placeholder'),
+          'aria-label': t('composer.placeholder'),
+          'aria-invalid': tooLong,
+          onChange: (event) => setDraft(event.target.value),
+          onKeyDown: (event) => {
+            // A textarea does not submit its form on Enter, so the composer
+            // asks for it explicitly: Enter saves, Shift+Enter breaks the line.
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault()
+              submit()
+            }
+          },
+        }),
+        h('button', {
+          key: 'add',
+          type: 'submit',
+          className: 'dshTodoButton dshTodoButtonPrimary dshTodoButtonCompact',
+          disabled: text === '' || tooLong,
+        }, [plusGlyph(), t('composer.add')]),
+      ]))
 
       // Refusing the text here, with the count and the way out, is the whole
       // point: the alternative is the Host's refusal after the fact.
@@ -631,13 +872,14 @@ window.__ModuleLoader__.load({
           className: unreachable ? 'dshTodoNotice dshTodoNoticeError' : 'dshTodoNotice',
           role: 'alert',
         }, [
+          h('span', { key: 'icon', className: 'dshTodoNoticeIcon', 'aria-hidden': true }, alertGlyph()),
           h('p', { key: 'text' }, unreachable
             ? t('error.unreachable', { message })
             : localized ?? t('error.rejected', { message })),
           h('button', {
             key: 'action',
             type: 'button',
-            className: 'dshTodoButton',
+            className: 'dshTodoButton dshTodoButtonCompact',
             onClick: () => (unreachable ? client.refresh() : client.dismiss()),
           }, unreachable ? t('retry') : t('dismiss')),
         ]))
@@ -650,22 +892,29 @@ window.__ModuleLoader__.load({
           'aria-pressed': filter === value,
           className: filter === value ? 'dshTodoFilterTab dshTodoFilterTabActive' : 'dshTodoFilterTab',
           onClick: () => setFilter(value),
-        }, t(`filter.${value}`)))),
+        }, [
+          t(`filter.${value}`),
+          h('span', { key: 'count', className: 'dshTodoFilterCount' }, String(filterCounts[value])),
+        ]))),
         h('button', {
           key: 'clear',
           type: 'button',
           className: 'dshTodoClear',
           disabled: snapshot.counts.done === 0,
-          onClick: () => client.clearCompleted(),
+          onClick: (event) => requestClear(event.currentTarget),
         }, t('clearDone')),
       ]))
 
       if (snapshot.status === 'loading') {
-        children.push(h('div', { key: 'loading', className: 'dshTodoEmpty' }, h('p', undefined, t('loading'))))
+        children.push(h('div', { key: 'loading', className: 'dshTodoLoading', 'aria-busy': 'true' }, [
+          h('span', { key: 'sr', className: 'dshTodoSrOnly' }, t('loading')),
+          ...[0, 1, 2].map((index) => h('div', { key: index, className: 'dshTodoSkeleton' })),
+        ]))
       } else if (todos.length === 0) {
         children.push(h('div', { key: 'empty', className: 'dshTodoEmpty' }, [
+          h('div', { key: 'art', className: 'dshTodoEmptyArt', 'aria-hidden': true }, h(TodoIcon, { size: 24 })),
           h('p', { key: 'title', className: 'dshTodoEmptyTitle' }, t(`empty.${filter}`)),
-          h('p', { key: 'hint' }, t('empty.hint')),
+          h('p', { key: 'hint', className: 'dshTodoEmptyHint' }, t(`emptyHint.${filter}`)),
         ]))
       } else {
         children.push(h('ul', { key: 'list', className: 'dshTodoList' }, todos.map((todo) => h(TodoRow, {
@@ -673,14 +922,24 @@ window.__ModuleLoader__.load({
           todo,
           client,
           t,
+          onRequestDelete: requestDelete,
         }))))
       }
 
-      return h('section', { className: 'dshTodoPage', 'aria-label': t('title'), 'data-testid': 'todo-page' }, [
-        h('div', { key: 'scroll', className: 'dshTodoScroll' }, [
-          h('div', { key: 'content', className: 'dshTodoContent' }, children),
-        ]),
-      ])
+      const page = [h('div', { key: 'scroll', className: 'dshTodoScroll' }, [
+        h('div', { key: 'content', className: 'dshTodoContent' }, children),
+      ])]
+      if (confirm !== null) {
+        page.push(h(ConfirmDialog, {
+          key: 'confirm',
+          request: confirm,
+          t,
+          onCancel: () => setConfirm(null),
+          onConfirm: acceptConfirm,
+        }))
+      }
+
+      return h('section', { className: 'dshTodoPage', 'aria-label': t('title'), 'data-testid': 'todo-page' }, page)
     }
 
     /**
@@ -712,7 +971,7 @@ window.__ModuleLoader__.load({
       ])
     }
 
-    /** @returns {object} a trash glyph for the row's delete action. */
+    /** @returns {object} a trash glyph for a destructive action. */
     function trashGlyph() {
       return h('svg', {
         width: 15, height: 15, viewBox: '0 0 20 20', fill: 'none',
@@ -722,6 +981,32 @@ window.__ModuleLoader__.load({
         h('path', { key: 'lid', d: 'M4 6 H16' }),
         h('path', { key: 'body', d: 'M6.5 6 V15.5 H13.5 V6' }),
         h('path', { key: 'handle', d: 'M8.2 6 V4.2 H11.8 V6' }),
+      ])
+    }
+
+    /** @returns {object} a plus glyph for the composer's add action. */
+    function plusGlyph() {
+      return h('svg', {
+        key: 'plus',
+        width: 13, height: 13, viewBox: '0 0 20 20', fill: 'none',
+        stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round',
+        'aria-hidden': true, focusable: false,
+      }, [
+        h('path', { key: 'vertical', d: 'M10 4.5 V15.5' }),
+        h('path', { key: 'horizontal', d: 'M4.5 10 H15.5' }),
+      ])
+    }
+
+    /** @returns {object} a warning glyph for the error notice. */
+    function alertGlyph() {
+      return h('svg', {
+        width: 16, height: 16, viewBox: '0 0 20 20', fill: 'none',
+        stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round',
+        strokeLinejoin: 'round', 'aria-hidden': true, focusable: false,
+      }, [
+        h('path', { key: 'ring', d: 'M10 2.9 L17.3 16.1 H2.7 Z' }),
+        h('path', { key: 'bar', d: 'M10 7.4 V11' }),
+        h('path', { key: 'dot', d: 'M10 13.4 V13.6' }),
       ])
     }
 

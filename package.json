@@ -1,6 +1,6 @@
 {
   "name": "dsh-todo-list",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "DeepSeek Harness plugin: a global todo list panel — add, edit, complete and delete tasks from anywhere in the harness, stored durably by the Host half",
   "keywords": [
     "dsh",
